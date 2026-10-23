@@ -1,0 +1,77 @@
+# Единый CD: тег из четырёх чисел (1.0.0.0) на коммите из main -> проверки -> релиз
+# с архивами во всех форматах. Вызывается из release.yml каждого репозитория скилла.
+name: Skill release
+
+on:
+  workflow_call:
+    inputs:
+      extra-check:
+        type: string
+        default: ''
+      os:
+        type: string
+        default: '["ubuntu-latest"]'
+      python:
+        type: string
+        default: '3.12'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Tag has four numbers and points to main
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Тег $TAG: нужно ровно четыре числа, например 1.0.0.0"; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::Тег $TAG не на ветке main"; exit 1; }
+
+  checks:
+    needs: validate-tag
+    uses: Dezodemius/agent-skills/.github/workflows/skill-ci.yml@main
+    with:
+      version: ${{ github.ref_name }}
+      extra-check: ${{ inputs.extra-check }}
+      os: ${{ inputs.os }}
+      python: ${{ inputs.python }}
+
+  publish:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: skill-dist
+          path: dist
+      - name: Publish release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          sha256sum --check SHA256SUMS
+          name=$(basename *.zip .zip)
+          if gh release view "$TAG" --json isDraft --jq .isDraft > "$RUNNER_TEMP/draft" 2>/dev/null; then
+            if [ "$(cat "$RUNNER_TEMP/draft")" = "false" ]; then
+              echo "::warning::Релиз $TAG уже опубликован, повторно не перезаписываю"
+              exit 0
+            fi
+          else
+            gh release create "$TAG" --draft --verify-tag --title "$name $TAG" --notes-file RELEASE_NOTES.md --generate-notes
+          fi
+          gh release upload "$TAG" "$name.zip" "$name.skill" "$name.prompt.md" SHA256SUMS --clobber
+          gh release edit "$TAG" --draft=false --latest

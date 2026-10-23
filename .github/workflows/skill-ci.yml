@@ -1,0 +1,79 @@
+# Единые проверки и сборка скилла. Вызывается из ci.yml каждого репозитория скилла
+# и из skill-release.yml при релизе.
+name: Skill CI
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Версия сборки (четыре числа). Для обычных проверок — 0.0.0.0
+        type: string
+        default: 0.0.0.0
+      extra-check:
+        description: Команда собственных проверок репозитория, например «python -X utf8 tools/check.py»
+        type: string
+        default: ''
+      os:
+        description: JSON-список ОС для проверок; ubuntu-latest обязателен (на нём собирается релиз)
+        type: string
+        default: '["ubuntu-latest"]'
+      python:
+        type: string
+        default: '3.12'
+      tools-ref:
+        description: Ветка или тег Dezodemius/agent-skills с инструментами
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.os) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check out shared tools
+        uses: actions/checkout@v4
+        with:
+          repository: Dezodemius/agent-skills
+          ref: ${{ inputs.tools-ref }}
+          path: .skill-ci
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --disable-pip-version-check PyYAML
+          if [ -f requirements-dev.txt ]; then python -m pip install --disable-pip-version-check -r requirements-dev.txt; fi
+      - name: Validate skill standard
+        run: python -X utf8 .skill-ci/tools/check.py .
+      - name: Repository checks
+        if: inputs.extra-check != ''
+        env:
+          EXTRA_CHECK: ${{ inputs.extra-check }}
+        run: eval "$EXTRA_CHECK"
+      - name: Package all formats
+        env:
+          VERSION: ${{ inputs.version }}
+          REPO: ${{ github.repository }}
+        run: python -X utf8 .skill-ci/tools/package.py . --version "$VERSION" --out dist --repo "$REPO"
+      - name: Upload packages
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
