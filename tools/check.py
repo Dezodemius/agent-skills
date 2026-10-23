@@ -75,8 +75,9 @@ def check_skill(skill):
         for found in PATH_RE.finditer(content):
             target = (found[1] or found[2]).rstrip(".")
             first = target.split("/")[0]
-            # Проверяем только пути в существующие папки скилла: остальное — имена выходных файлов.
-            if not (skill / first).is_dir():
+            # Проверяем только пути в существующие папки скилла: остальное — имена выходных файлов
+            # или файлы репозитория вне скилла (../NOTICE), которые сборка кладёт в архив сама.
+            if first in {".", ".."} or not (skill / first).is_dir():
                 continue
             if not any((base / target).exists() for base in (skill, md.parent)):
                 errors.append(f"{rel}: ссылка на несуществующий файл {target}")
